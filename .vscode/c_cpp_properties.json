@@ -1,0 +1,20 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "Android-ndk",
+      "compilerPath": "C:/Users/HP/AppData/Local/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe",
+      "intelliSenseMode": "windows-clang-x64",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "includePath": [
+        "${workspaceFolder}/android/app/src/main/cpp",
+        "C:/Users/HP/AppData/Local/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include",
+        "C:/Users/HP/AppData/Local/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/aarch64-linux-android"
+      ],
+      "defines": [
+        "__ANDROID__"
+      ]
+    }
+  ]
+}
