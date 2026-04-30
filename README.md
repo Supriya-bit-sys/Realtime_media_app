@@ -1,16 +1,15 @@
-# lora_voice_app
+# Realtime LoRa Media App
 
-A new Flutter project.
+A Flutter Android app for sending realtime LoRa/BLE chat data through Heltec boards. The app can scan BLE gateways, connect to a Heltec device, and exchange text, image, and audio messages over the LoRa bridge.
 
-## Getting Started
+## Documentation
 
-This project is a starting point for a Flutter application.
+- [Setup and run guide](SETUP_AND_RUN.md)
+- [Protocol notes](PROTOCOL.md)
+## Board Sketches
 
-A few resources to get you started if this is your first Flutter project:
+- `lib/heltec1.ino`
+- `lib/heltec2.ino`
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Start with [SETUP_AND_RUN.md](SETUP_AND_RUN.md) if you cloned this project from GitHub and want to run it on your own machine.

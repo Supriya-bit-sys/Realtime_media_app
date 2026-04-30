@@ -1,107 +1,62 @@
-# LoRa Voice App Protocol
-
-This document defines the intended architecture and packet protocol for the app, BLE gateways, and LoRa server.
 
 ## 1. System Roles
 
 - `Phone app`
-  Sends and receives raw binary transport packets over BLE.
-- `BLE gateway Heltec`
-  Bridges phone BLE traffic to LoRa, performs encryption/decryption, chunking, ACK handling, and peer session setup.
-- `LoRa server Heltec`
-  Registers gateways, tracks presence, answers discovery and key requests, and relays opaque encrypted peer traffic.
+  Sends and receives binary transport packets over BLE.
+- `Heltec gateway`
+  Bridges BLE packets from the phone to LoRa frames and bridges received LoRa frames back to BLE notifications.
+- `Other Heltec gateway`
+  Receives LoRa frames, reassembles packets, and notifies its connected phone over BLE.
 
-## 2. Trust Model
+The current `heltec1.ino` and `heltec2.ino` sketches are almost the same relay design with different BLE device names:
 
-- BLE between phone and gateway is raw binary and is not encrypted.
-- Encryption starts at the Heltec gateway.
-- Server traffic is encrypted between gateway and server after registration.
-- Peer message traffic is end-to-end encrypted between sender gateway and receiver gateway.
-- The server relays peer ciphertext and should not need to decrypt peer message content.
+- `Heltec_1`
+- `Heltec_2`
 
-## 3. Registration And Identity
+## 2. Current Security Model
 
-Each gateway has:
 
-- `nodeId`
-- `name`
-- `publicKey`
-- `privateKey`
 
-On first boot or after flash:
+- BLE packets are sent as raw bytes.
+- LoRa frames are sent as raw bytes.
+- CRC32 is used to detect corrupted packets.
+- Codec2 audio encoding compresses voice data, but it is not encryption.
 
-1. Gateway loads or generates its keypair.
-2. Gateway sends `REGISTER(nodeId, name, publicKey)` to server.
-3. Server stores the gateway identity.
-4. Server replies with `REGISTER_ACK`.
-5. Gateway then sends presence updates when phone BLE connect state changes.
 
-Notes:
 
-- Registration may remain unencrypted because the public key is not secret.
-- Private keys never leave the gateway.
 
-## 4. Discovery And Peering
+## 3. BLE Connection
 
-`Peering` means selecting a LoRa chat partner and preparing a secure session key.
+The Flutter app scans for BLE devices whose name contains `Heltec`.
 
-Flow:
+The Heltec sketches expose:
 
-1. Phone scans nearby BLE devices.
-2. Phone connects to one gateway.
-3. Phone sends gateway register/bootstrap command over BLE.
-4. Gateway registers with server if needed.
-5. Phone asks gateway to discover LoRa peers.
-6. Gateway sends `DISCOVER_REQ` to server.
-7. Server returns available peers with online status.
-8. Phone shows discovered peers.
-9. User selects one peer for chat.
-10. Gateway requests that peer's public key from server.
-11. Server returns peer public key plus server signature.
-12. Gateway verifies the signature.
-13. Gateway derives a shared session key with ECDH.
-14. Gateway marks the peer as ready for secure chat.
+- BLE service UUID: `12345678-1234-1234-1234-1234567890ab`
+- BLE characteristic UUID: `abcd1234-5678-1234-5678-abcdef123456`
 
-Receiver behavior:
+The characteristic supports:
 
-- A receiver gateway accepts secure peer packets for the currently selected and key-synced peer.
-- In the current implementation, one secure chat route is active at a time on a gateway.
-- Receiver phone does not need to connect to sender phone.
-- Receiver phone only needs BLE connection to its own gateway.
+- write
+- write without response
+- notify
 
-## 5. End-To-End Message Path
+The app writes outgoing transport packets to this characteristic. The Heltec board notifies incoming transport packets back to the app on the same characteristic.
 
-For text, image, and audio:
+## 4. App Transport Packet
 
-1. Phone creates a raw binary transport packet.
-2. Phone writes the transport packet to its gateway over BLE.
-3. Gateway validates packet CRC.
-4. Gateway splits the transport packet into LoRa frames.
-5. Gateway encrypts peer payload using the selected peer session key.
-6. Gateway wraps encrypted peer payload for server relay.
-7. Server forwards the opaque encrypted peer packet.
-8. Receiver gateway decrypts peer payload.
-9. Receiver gateway reassembles LoRa frames into one transport packet.
-10. Receiver gateway notifies its phone over BLE with the raw binary transport packet.
-11. Receiver phone validates CRC, reassembles message data if needed, and stores only when complete.
-
-## 6. BLE Transport Packet
-
-Phone and gateway communicate using one binary transport format.
-
-The gateway treats app transport packet types as opaque raw-binary payloads. It validates, chunks, encrypts, relays, decrypts, reassembles, and notifies, but it does not interpret text/image/audio semantics.
+The Flutter app wraps text, image, recorded audio, and realtime audio control data in binary transport packets.
 
 ### Packet Layout
 
-- `magicLo` : 1 byte
-- `magicHi` : 1 byte
-- `version` : 1 byte
-- `type` : 1 byte
-- `headerLen` : 1 byte
-- `payloadLen` : 2 bytes, little-endian
-- `crc32` : 4 bytes, little-endian
-- `header` : `headerLen` bytes
-- `payload` : `payloadLen` bytes
+- `magicLo`: 1 byte, `0xB5`
+- `magicHi`: 1 byte, `0x62`
+- `version`: 1 byte
+- `type`: 1 byte
+- `headerLen`: 1 byte
+- `payloadLen`: 2 bytes, little-endian
+- `crc32`: 4 bytes, little-endian
+- `header`: `headerLen` bytes
+- `payload`: `payloadLen` bytes
 
 ### CRC Scope
 
@@ -114,240 +69,130 @@ CRC32 is computed over:
 - `header`
 - `payload`
 
-### BLE Chunking
+The receiver validates CRC before accepting the packet. A CRC failure means the packet is discarded.
 
-- Max BLE notify/write chunk: about `240` bytes
-- A transport packet may span multiple BLE chunks.
-- BLE is treated as lossless.
-- Reassembly is done before packet decoding.
+## 5. Transport Packet Types
 
-## 7. LoRa Frame Format
+The app uses packet types for:
 
-Each transport packet is split into LoRa frames.
+- text message
+- text start/stop
+- text chunk
+- text ACK/NACK/delivery ACK
+- image start
+- image chunk
+- image done
+- image ACK/NACK/delivery ACK
+- audio chunk
+- audio done
+- audio ACK/NACK/delivery ACK
+- realtime audio start
+- realtime audio data
+- realtime audio stop
+
+Packet type values are defined in `lib/main.dart`.
+
+## 6. LoRa Frame Format
+
+The Heltec board fragments one app transport packet into multiple LoRa frames.
 
 ### Frame Layout
 
-- `frameMagic` : 1 byte
-- `frameId` : 2 bytes, little-endian
-- `chunkIndex` : 1 byte
-- `totalChunks` : 1 byte
-- `payloadLen` : 1 byte
-- `payload` : up to `80` bytes
+- `frameMagic`: 1 byte, `0xB7`
+- `frameId`: 2 bytes, little-endian
+- `chunkIndex`: 1 byte
+- `totalChunks`: 1 byte
+- `payloadLen`: 1 byte
+- `payload`: transport packet bytes
 
-Rules:
+The payload is copied directly from the app transport packet. It is not encrypted before LoRa transmission.
 
-- `chunkIndex = 0` starts a new frame assembly.
-- Last frame may carry less than `80` bytes.
-- Total message is complete only when all chunks arrive in order and expected length matches.
+## 7. Heltec Bridge Flow
 
-## 8. ACK Model
+Outgoing path:
 
-Two ACK layers are required.
+1. Phone writes a binary transport packet over BLE.
+2. Heltec receives BLE bytes.
+3. Heltec reassembles the full transport packet.
+4. Heltec fragments the packet into LoRa frames.
+5. Heltec transmits each LoRa frame using RadioLib.
 
-### LoRa Frame ACK
+Incoming path:
 
-- Receiver gateway sends ACK for every LoRa frame.
-- Sender gateway retries on timeout.
-- This handles lossy LoRa transport.
+1. Heltec receives LoRa frames.
+2. Heltec reassembles the transport packet.
+3. Heltec sends the full packet to the phone using BLE notify.
+4. Flutter app decodes the packet and validates CRC.
+5. Flutter app stores or displays the completed message.
 
-### Message Completion ACK
+## 8. Text Transfer
 
-- After full message assembly and validation, receiver side sends final done/delivery ACK.
-- Sender marks the message delivered only after final completion ACK.
+Small text can be sent in one binary packet.
 
-## 9. Message Families
+Longer text is sent as:
 
-Use a single binary transport system with different packet types.
+1. text start
+2. text chunks
+3. text done
+4. delivery ACK
 
-### Text
+Each text chunk includes a CRC for that chunk. The final done packet includes a CRC for the complete text.
 
-For small text:
+## 9. Image Transfer
 
-- one packet can be enough
+Images are compressed by the app before sending.
 
-Recommended text header:
+Image transfer uses:
 
-- `messageId`
-- `timestamp`
-- `textCrc`
+1. image start
+2. image chunks
+3. missing chunk requests when needed
+4. image done
+5. delivery ACK
 
-Payload:
+Each image chunk includes a CRC. The image done packet includes the final image CRC.
 
-- UTF-8 text bytes
+## 10. Audio Transfer
 
-### Image
+Recorded audio is converted from WAV/PCM and encoded with Codec2 before transfer.
 
-Recommended packet sequence:
+Audio transfer uses:
 
-- `IMAGE_START`
-- `IMAGE_CHUNK`
-- `IMAGE_DONE`
-- `IMAGE_CNAK` when a chunk is missing/corrupt
-- `IMAGE_DACK` when fully stored
+1. audio chunks
+2. audio done
+3. chunk ACK/NACK
+4. delivery ACK
 
-`IMAGE_START` header:
+Codec2 reduces audio size for LoRa transfer, but it does not encrypt the audio.
 
-- `messageId`
-- `totalChunks`
-- `fileExtension`
-- optional `timestamp`
+## 11. Realtime Audio
 
-`IMAGE_CHUNK` header:
+Realtime audio uses a separate packet marker:
 
-- `messageId`
-- `seq`
-- `totalChunks`
-- `chunkCrc`
+- BLE audio marker: `0xA5`
+- LoRa audio marker: `0xA6`
 
-`IMAGE_CHUNK` payload:
+Realtime audio packet types:
 
-- raw compressed image bytes
+- start: `0x01`
+- audio data: `0x02`
+- stop: `0x03`
 
-`IMAGE_DONE` header:
+The realtime audio path sends encoded/compressed audio frames through the Heltec bridge. This data is also not encrypted.
 
-- `messageId`
-- `totalChunks`
-- `fullImageCrc`
+## 12. Storage Rules
 
-### Audio
+The phone stores messages in SQLite.
 
-Recommended packet sequence:
-
-- `AUDIO_START`
-- `AUDIO_CHUNK`
-- `AUDIO_DONE`
-- `AUDIO_CNAK`
-- `AUDIO_DACK`
-
-`AUDIO_START` header:
-
-- `messageId`
-- `totalChunks`
-
-`AUDIO_CHUNK` header:
-
-- `messageId`
-- `seq`
-- `totalChunks`
-- `chunkCrc`
-
-`AUDIO_CHUNK` payload:
-
-- compressed audio bytes
-
-`AUDIO_DONE` header:
-
-- `messageId`
-- `totalChunks`
-- `fullAudioCrc`
-
-## 10. Metadata Optimization
-
-To reduce overhead:
-
-- put repeated metadata in first packet or start packet
-- keep middle packets small
-- include final whole-message CRC only in done packet
-
-Recommended division:
-
-- first packet:
-  `messageId`, `messageType`, `timestamp`, `totalChunks`, extra metadata
-- middle packet:
-  `messageId`, `seq`, `chunkCrc`
-- last or done packet:
-  `messageId`, `totalChunks`, `finalCrc`
-
-## 11. Encryption Layers
-
-### Gateway <-> Server
-
-Used for:
-
-- discover
-- presence
-- key fetch
-- relay request
-- register ack and other control responses
-
-Method:
-
-- derive transport key from gateway keypair and server public/private key pair
-
-### Gateway <-> Gateway
-
-Used for:
-
-- secure text/image/audio frames
-- per-frame delivery ACK
-
-Method:
-
-- sender gateway derives peer session key from selected peer public key
-- receiver gateway derives the same key from sender public key context
-
-## 12. Server Responsibilities
-
-The server should:
-
-- store `(nodeId, name, publicKey)`
-- track presence
-- return peer lists
-- return signed peer public keys
-- relay encrypted peer packets without interpreting message contents
-
-The server should not be the chat endpoint.
-
-## 13. Phone Storage Rules
-
-Phone stores a message in database only when:
-
-1. all chunks are received
-2. final CRC passes
-3. message is marked complete
-
-Store fields:
+Message records include:
 
 - `id`
-- `peerId`
-- `timestamp`
-- `fromUser`
-- `mediaType`
 - `text` or local file path
-- delivery status
+- `timestamp`
+- `status`
+- `fromUser`
+- `isImage`
+- `conversationId`
+- retry metadata
 
-## 14. Chat UI Rules
-
-- Messages are filtered by `peerId`.
-- Local user messages are shown on the right.
-- Remote peer messages are shown on the left.
-- Receiver phone can display messages from its connected gateway even when sender phone is offline.
-
-## 15. Recommended Packet Types
-
-Suggested logical packet families:
-
-- gateway control:
-  `GW_REGISTER_REQ`, `GW_REGISTER_ACK`, `GW_DISCOVER_REQ`, `GW_PEER_LIST`, `GW_SELECT_PEER`, `GW_FETCH_PEER_KEY`, `GW_PEER_READY`, `GW_ERROR`, `GW_QUEUE_STATUS`
-- text:
-  `TEXT_MSG`, `TEXT_ACK`, `TEXT_CNAK`, `TEXT_DACK`
-- image:
-  `IMAGE_START`, `IMAGE_CHUNK`, `IMAGE_DONE`, `IMAGE_CACK`, `IMAGE_CNAK`, `IMAGE_DACK`
-- audio:
-  `AUDIO_START`, `AUDIO_CHUNK`, `AUDIO_DONE`, `AUDIO_CACK`, `AUDIO_CNAK`, `AUDIO_DACK`
-
-## 16. Final Agreed Architecture
-
-This project should follow these final rules:
-
-- raw binary over BLE
-- no phone-to-gateway BLE encryption
-- encryption only at Heltec layer
-- binary transport packets with CRC
-- 240-byte BLE chunking
-- 80-byte LoRa framing
-- per-frame ACK on LoRa
-- final message completion ACK
-- server-mediated relay for peer traffic
-- server-signed public key distribution
-- DB insert only after full validation
+Images and audio are stored as local files. The database stores their file paths.

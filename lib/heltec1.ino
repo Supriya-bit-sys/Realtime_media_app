@@ -20,7 +20,7 @@ struct TransportPacket;
 
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
-#define DEVICE_NAME                   "Heltec_Receiver"
+#define DEVICE_NAME                   "Heltec_1"
 #define BLE_SERVICE_UUID              "12345678-1234-1234-1234-1234567890ab"
 #define BLE_CHARACTERISTIC_UUID       "abcd1234-5678-1234-5678-abcdef123456"
 
@@ -229,7 +229,7 @@ bool queueLoRaPacket(const uint8_t* data, uint16_t len, uint8_t postTxDelayMs) {
   pkt.len = len;
   pkt.postTxDelayMs = postTxDelayMs;
   memcpy(pkt.data, data, len);
-  DEBUG_LOG("[RX] queueLoRaPacket len=%u delay=%u first=0x%02X\n", len, postTxDelayMs, data[0]);
+  DEBUG_LOG("[TX] queueLoRaPacket len=%u delay=%u first=0x%02X\n", len, postTxDelayMs, data[0]);
   return xQueueSend(gLoraTxQueue, &pkt, pdMS_TO_TICKS(50)) == pdPASS;
 }
 
@@ -372,7 +372,7 @@ void notifyBleAudioPacket(BleAudioType type, const uint8_t* payload, uint8_t pay
   if (payloadLen > 0 && payload != nullptr) {
     memcpy(packet + BLE_AUDIO_HEADER_BYTES, payload, payloadLen);
   }
-  DEBUG_LOG("[RX] notify BLE audio type=%u payload=%u final=%u\n", (unsigned)type, payloadLen, finalChunk ? 1 : 0);
+  DEBUG_LOG("[TX] notify BLE audio type=%u payload=%u final=%u\n", (unsigned)type, payloadLen, finalChunk ? 1 : 0);
   if (gBleNotifyMutex == nullptr) return;
   xSemaphoreTake(gBleNotifyMutex, portMAX_DELAY);
   gTransportChar->setValue(packet, BLE_AUDIO_HEADER_BYTES + payloadLen);
@@ -383,7 +383,7 @@ void notifyBleAudioPacket(BleAudioType type, const uint8_t* payload, uint8_t pay
 
 void notifyBleTransportPacket(const uint8_t* packet, size_t packetLen) {
   if (!gDeviceConnected || gTransportChar == nullptr || gBleNotifyMutex == nullptr) return;
-  DEBUG_LOG("[RX] notify transport bytes=%u type=0x%02X\n", (unsigned)packetLen, packetLen > 3 ? packet[3] : 0x00);
+  DEBUG_LOG("[TX] notify transport bytes=%u type=0x%02X\n", (unsigned)packetLen, packetLen > 3 ? packet[3] : 0x00);
   xSemaphoreTake(gBleNotifyMutex, portMAX_DELAY);
   size_t offset = 0;
   while (offset < packetLen) {
@@ -402,7 +402,7 @@ void fragmentAndQueueTransportPacket(const uint8_t* packet, size_t packetLen) {
   if (packetLen < TRANSPORT_PREFIX_BYTES || packetLen > TRANSPORT_MAX_PACKET_BYTES) return;
   const uint16_t frameId = gNextFrameId++;
   const uint8_t totalChunks = (packetLen + FRAME_PAYLOAD_BYTES - 1) / FRAME_PAYLOAD_BYTES;
-  DEBUG_LOG("[RX] fragment transport bytes=%u frameId=%u chunks=%u type=0x%02X\n",
+  DEBUG_LOG("[TX] fragment transport bytes=%u frameId=%u chunks=%u type=0x%02X\n",
     (unsigned)packetLen, frameId, totalChunks, packet[3]);
   for (uint8_t chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     const size_t payloadOffset = chunkIndex * FRAME_PAYLOAD_BYTES;
@@ -426,7 +426,7 @@ void handleCompleteTransportPacket(const uint8_t* packet, size_t packetLen) {
 }
 
 void appendTransportBleBytes(const uint8_t* data, size_t len) {
-  DEBUG_LOG("[RX] BLE transport write bytes=%u first=0x%02X\n", (unsigned)len, len > 0 ? data[0] : 0x00);
+  DEBUG_LOG("[TX] BLE transport write bytes=%u first=0x%02X\n", (unsigned)len, len > 0 ? data[0] : 0x00);
   xSemaphoreTake(gBleAssemblyMutex, portMAX_DELAY);
   for (size_t i = 0; i < len; i++) {
     if (gBlePacketLength >= BLE_PACKET_BUFFER_BYTES) {
@@ -453,7 +453,7 @@ void appendTransportBleBytes(const uint8_t* data, size_t len) {
     if (gBlePacketExpected > 0 && gBlePacketLength == gBlePacketExpected) {
       const size_t packetLen = gBlePacketExpected;
       memcpy(gBleTransportScratch, gBlePacketBuffer, packetLen);
-      DEBUG_LOG("[RX] BLE transport assembled bytes=%u type=0x%02X\n", (unsigned)packetLen, gBleTransportScratch[3]);
+      DEBUG_LOG("[TX] BLE transport assembled bytes=%u type=0x%02X\n", (unsigned)packetLen, gBleTransportScratch[3]);
       gBlePacketLength = 0;
       gBlePacketExpected = 0;
       xSemaphoreGive(gBleAssemblyMutex);
@@ -472,7 +472,7 @@ void handleIncomingBleAudioPacket(const uint8_t* bytes, size_t packetLen) {
   const size_t bytesToCopy = payloadLen < availablePayload ? payloadLen : availablePayload;
 
   if (packetType == BLE_AUDIO_START) {
-    DEBUG_LOG("[RX] BLE audio START\n");
+    DEBUG_LOG("[TX] BLE audio START\n");
     clearRawAudioBuffer();
     clearCompressedBuffer();
     gPttSessionActive = true;
@@ -481,17 +481,16 @@ void handleIncomingBleAudioPacket(const uint8_t* bytes, size_t packetLen) {
     return;
   }
   if (packetType == BLE_AUDIO_STOP) {
-    DEBUG_LOG("[RX] BLE audio STOP\n");
+    DEBUG_LOG("[TX] BLE audio STOP\n");
     gPttSessionActive = false;
     gPttStopRequested = true;
     return;
   }
   if (packetType != BLE_AUDIO_DATA) return;
   if (!gPttSessionActive) {
-    DEBUG_LOG("[RX] BLE audio DATA dropped while inactive bytes=%u\n", (unsigned)bytesToCopy);
+    DEBUG_LOG("[TX] BLE audio DATA dropped while inactive bytes=%u\n", (unsigned)bytesToCopy);
     return;
   }
-  DEBUG_LOG("[RX] BLE audio DATA bytes=%u\n", (unsigned)bytesToCopy);
   pushRawAudioBytes(bytes + BLE_AUDIO_HEADER_BYTES, bytesToCopy);
 }
 
@@ -529,7 +528,7 @@ class TransportCallbacks : public BLECharacteristicCallbacks {
     if (value.empty()) return;
     const uint8_t* bytes = reinterpret_cast<const uint8_t*>(value.data());
     const size_t packetLen = value.size();
-    DEBUG_LOG("[RX] BLE onWrite bytes=%u first=0x%02X\n", (unsigned)packetLen, bytes[0]);
+    DEBUG_LOG("[TX] BLE onWrite bytes=%u first=0x%02X\n", (unsigned)packetLen, bytes[0]);
     if (packetLen >= BLE_AUDIO_HEADER_BYTES && bytes[0] == BLE_AUDIO_MAGIC) {
       handleIncomingBleAudioPacket(bytes, packetLen);
       return;
@@ -577,7 +576,7 @@ void loraRxTask(void* param) {
     if (pkt.len > 0 && pkt.len <= LORA_PACKET_MAX_BYTES) {
       const int state = radio.readData(pkt.data, pkt.len);
       if (state == RADIOLIB_ERR_NONE) {
-        DEBUG_LOG("[RX] LoRa RX len=%u first=0x%02X\n", pkt.len, pkt.data[0]);
+        DEBUG_LOG("[TX] LoRa RX len=%u first=0x%02X\n", pkt.len, pkt.data[0]);
         if (pkt.data[0] == FRAME_MAGIC) {
           if (xQueueSend(gTransportRxQueue, &pkt, pdMS_TO_TICKS(10)) == pdPASS &&
               gTransportAssemblerTaskHandle != nullptr) {
@@ -646,7 +645,7 @@ void transportAssemblerTask(void* param) {
       xSemaphoreGive(gRxAssemblyMutex);
 
       if (complete) {
-        DEBUG_LOG("[RX] transport complete bytes=%u\n", (unsigned)packetLen);
+        DEBUG_LOG("[TX] transport complete bytes=%u\n", (unsigned)packetLen);
         handleCompleteTransportPacket(gCompleteTransportScratch, packetLen);
       }
     }
@@ -724,7 +723,7 @@ void audioEncodeTask(void* param) {
         queueCompressedForLora(LORA_AUDIO_TARGET_BYTES);
       }
     } else if (gPttStopRequested) {
-      DEBUG_LOG("[RX] draining compressed tail\n");
+      DEBUG_LOG("[TX] draining compressed tail\n");
       LoRaPacket pkt;
       while (popCompressedTailPacket(&pkt, LORA_AUDIO_TARGET_BYTES)) {
         pkt.postTxDelayMs = AUDIO_LORA_INTER_PACKET_DELAY_MS;
@@ -769,9 +768,8 @@ void bleNotifyTask(void* param) {
       xSemaphoreGive(gDecodedPcmMutex);
 
       if (streamActive && sequence == 0) {
-        DEBUG_LOG("[RX] BLE notify audio stream active\n");
+        DEBUG_LOG("[TX] BLE notify audio stream active\n");
       }
-      DEBUG_LOG("[RX] BLE notify audio DATA bytes=%u\n", BLE_AUDIO_NOTIFY_BYTES);
       notifyBleAudioPacket(BLE_AUDIO_DATA, audioPayload, BLE_AUDIO_NOTIFY_BYTES, false);
       lastBleNotifyMs = millis();
     }
@@ -794,7 +792,6 @@ void bleNotifyTask(void* param) {
         }
         xSemaphoreGive(gDecodedPcmMutex);
         if (chunkLen == 0) break;
-        DEBUG_LOG("[RX] BLE notify audio DATA tail bytes=%u final=%u\n", (unsigned)chunkLen, remainingAfter == 0 ? 1 : 0);
         notifyBleAudioPacket(BLE_AUDIO_DATA, audioPayload, chunkLen, remainingAfter == 0);
       }
       stopBleStreamAndResetSequence();
@@ -808,7 +805,7 @@ void loraTxTask(void* param) {
   while (true) {
     if (xQueueReceive(gLoraTxQueue, &pkt, portMAX_DELAY) != pdPASS) continue;
     gLoraIsrEnabled = false;
-    DEBUG_LOG("[RX] LoRa TX len=%u first=0x%02X\n", pkt.len, pkt.data[0]);
+    DEBUG_LOG("[TX] LoRa TX len=%u first=0x%02X\n", pkt.len, pkt.data[0]);
     const int txState = radio.transmit(pkt.data, pkt.len);
     if (txState != RADIOLIB_ERR_NONE) {
       Serial.printf("LoRa TX failed code=%d\n", txState);
@@ -861,7 +858,7 @@ void setup() {
     while (1) delay(1000);
   }
 
-  Serial.printf("[RX] Codec2 geometry samples=%u bytes=%u\n",
+  Serial.printf("[TX] Codec2 geometry samples=%u bytes=%u\n",
     (unsigned)gCodec2SamplesPerFrame,
     (unsigned)gCodec2CompressedBytesPerFrame);
 
